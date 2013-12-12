@@ -1,0 +1,13 @@
+{
+  "name": "tempest",
+  "description": "A distributed stream processing system in node.js",
+  "author": "Maycon Bordin <mayconbordin@gmail.com>",
+  "dependencies": {
+    "zerorpc": "0.9.3",
+    "heap": "0.2.3",
+    "log4js": "0.6.9",
+    "zmq": "2.5.1"
+  },
+  "devDependencies": {},
+  "engine": "node >= 0.10.x"
+}

@@ -1,0 +1,173 @@
+#!/bin/bash
+
+# tempest home folder
+TEMPEST_HOME="/media/data/Dropbox/programming/node_stream/spe"
+
+# node.js binary path
+NODEJS_BIN="/usr/local/bin/node"
+
+# ssh options
+TEMPEST_SSH_BIN="oarsh"
+TEMPEST_SSH_OPTS="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet"
+
+
+# USAGE
+################################################################################
+print_usage()
+{
+  echo "Usage: tempest COMMAND"
+  echo "where COMMAND is one of:"
+  echo "  start     start the daemons and master described in the configuration file"
+  echo "  stop      stop the daemons and master"
+  echo "  status    print the status of all processes"
+  echo "  daemon    start the daemon on localhost"
+  echo "  master    start the master on localhost"
+}
+
+# if no args specified, show usage
+if [ $# = 0 ]; then
+  print_usage
+  exit 1
+fi
+
+
+# COMMANDS
+################################################################################
+master_cmd="
+    var config = require('$TEMPEST_HOME/config/default.js');
+    console.log(config.master.node);
+"
+
+slaves_cmd="
+    var config = require('$TEMPEST_HOME/config/default.js');
+    config.slaves.nodes.forEach(function(node) {
+        var rpcPort = node.rpcPort || config.slaves.rpcPort;
+        var workerPort = node.workerPort || config.slaves.workerPort;
+        console.log(node.addr + ':' + rpcPort + ':' + workerPort + ':' + node.id);
+    });
+"
+
+
+# VARIABLES
+################################################################################
+slaves=$($NODEJS_BIN -e "$slaves_cmd")
+master=$($NODEJS_BIN -e "$master_cmd")
+proc_list="$TEMPEST_HOME/bin/tempest.pid"
+BIN_DIR="$TEMPEST_HOME/bin"
+
+
+# EXECUTE
+################################################################################
+case "$1" in
+
+# START
+################################################################################
+    "start")
+        # clear the list of pids
+        echo -ne "" > $proc_list
+        
+        for slave in ${slaves[@]}
+        do
+            IFS=':' read -a slaveinfo <<< "${slave}"
+            echo "Starting ${slaveinfo[3]} @ ${slaveinfo[0]}:${slaveinfo[1]}"
+            start_daemon="$BIN_DIR/tempest daemon ${slaveinfo[3]} ${slaveinfo[1]} true"
+            pid=$($TEMPEST_SSH_BIN $TEMPEST_SSH_OPTS ${slaveinfo[0]} "$start_daemon")
+            
+            echo "${slaveinfo[3]}:${slaveinfo[0]}:$pid" >> $proc_list
+	    done
+
+        echo "Starting master"
+        sleep 5s
+        start_master="$BIN_DIR/tempest master true"
+        pid=$($TEMPEST_SSH_BIN $TEMPEST_SSH_OPTS $master "$start_master")
+        echo "master:127.0.0.1:$pid" >> $proc_list
+        echo "Done"
+        ;;
+
+# STOP
+################################################################################
+    "stop")
+        processes=( $(cat $proc_list) )
+
+        for proc in ${processes[@]}
+	    do
+	        IFS=':' read -a info <<< "${proc}"
+	        echo "Stopping ${info[0]} (${info[2]}) @ ${info[1]}"
+	        $TEMPEST_SSH_BIN $TEMPEST_SSH_OPTS ${info[1]} "kill ${info[2]}"
+	    done
+        ;;
+
+# STATUS
+################################################################################
+    "status")
+        processes=( $(cat $proc_list) )
+
+        echo -ne "NAME\tPID\tCPU\tMEM\tHOST\n"
+
+        for proc in ${processes[@]}
+        do
+            IFS=':' read -a info <<< "${proc}"
+            status=$($TEMPEST_SSH_BIN $TEMPEST_SSH_OPTS ${info[1]} "ps aux | grep ${info[2]} | head -n 1")
+            data_str=$(echo $status | awk '{print $2, $3, $4}')
+            read -a data <<< "${data_str}"
+            echo -ne "${info[0]}\t${data[0]}\t${data[1]}\t${data[2]}\t${info[1]}\n"
+        done
+        ;;
+        
+# DAEMON
+################################################################################
+    "daemon")
+        if [ $# -le 2 ]; then
+            echo "Usage: tempest daemon <node_id> <rpc_port>"
+            exit 1
+        fi
+        
+        nohup $NODEJS_BIN $BIN_DIR/rpc/daemon.js "$2" "$3" true >/dev/null 2>&1 &
+        ;;
+        
+# MASTER
+################################################################################
+    "master")
+        nohup $NODEJS_BIN $BIN_DIR/rpc/master.js true >/dev/null 2>&1 &
+        ;;
+        
+# APPLICATION
+################################################################################
+    "app")
+        commands="start stop status graph plan"
+        
+        if [ $# -le 1 ]; then
+            echo "Usage: tempest app COMMAND"
+            echo "where COMMAND is one of:"
+            echo "  submit     submit the application"
+            echo "  start      start running the application"
+            echo "  stop       stop the application, if it's running"
+            echo "  status     gives the status of the application"
+            echo "  graph      return the application graph of operators in JSON"
+            echo "  plan       return the operator placement in JSON"
+            exit 1
+        fi
+        
+        # Submit
+        if [ "$2" == "submit" ]; then
+            if [ $# -le 2 ]; then
+                echo "Usage: tempest app submit <app_file>"
+                exit 1
+            fi
+            
+            $NODEJS_BIN $BIN_DIR/rpc/client.js submit "$3"
+        
+        # Other commands
+        elif [[ ${commands[@]} =~ "$2" ]]; then
+            $NODEJS_BIN $BIN_DIR/rpc/client.js "$2"
+        fi
+        
+        ;;
+        
+# DEFAULT
+################################################################################
+    *)
+        print_usage
+        exit 1
+        ;;
+esac
