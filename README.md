@@ -1,6 +1,6 @@
 # Tempest
 
-Tempest is a distributed stream processing system written in node.js.
+Tempest is a distributed stream processing system written in node.js. [See](http://www.slideshare.net/mayconbordin/slides-29152083) my presentation for an overview of the system.
 
 ## Installation
 
